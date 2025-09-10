@@ -7,16 +7,62 @@ import scipy as sp
 # page 51 gives dense matrix gauss-elim process illustrated in prev example 1_dense_gauss_elim.py
 # here I extend to sparse Gauss-elim for symmetric matrix (so I only need elimination tree)
 
+# see if random order stabilize LU factor... will add fillin though..
+# random_order = False
+random_order = True
+
+# # nxe = 4
+# # nxe = 16 # beam problem is getting less accurate LU factor with standard ordering with more DOF also.. probably due to longer chain lengths
+# nxe = 32 # gets way less accurate LU factor.. even for beam as go up in DOF
+# # nxe = 64
+# # I can make some plots of this stuff as well for my paper?
+# A, rhs = get_beam_csr_mat_and_rhs(nxe, csr=True)
+
+# plate case is much larger and blows up numerically right now.. due to long chain lengths
 nxe = 4
-A, rhs = get_beam_csr_mat_and_rhs(nxe, csr=True)
-# A, rhs = get_plate_csr_mat_and_rhs(nxe, csr=True)
+A, rhs = get_plate_csr_mat_and_rhs(nxe, csr=True)
 A0 = A.copy()
 # it's a 2DOF per node or Bsr2 matrix stored as CSR
 
 # now show the LU factorization using Gaussian elimination..
 # A will become U in-place now..
 N = A.shape[0]
-rowp, cols = A.indptr, A.indices
+orig_rowp, orig_cols = A.indptr, A.indices
+
+# compute permutation map, perm sends to permuted nodes, iperm back to unpermuted (standard order)
+if random_order:
+    perm = np.random.permutation(N)
+    ind = np.arange(0, N)
+    iperm = np.zeros(N, dtype=np.int32)
+    iperm[perm] = ind
+
+    # compute new A_perm and sparsity
+    orig_nnz = orig_cols.shape[0]
+    rowp = np.zeros(N + 1, dtype=np.int32)
+    rows = np.zeros(orig_nnz, dtype=np.int32)
+    cols = np.zeros(orig_nnz, dtype=np.int32)
+    for perm_node in range(N):
+        node = iperm[perm_node]
+        row_ct = orig_rowp[node + 1] - orig_rowp[node]
+        rowp[perm_node + 1] = rowp[perm_node] + row_ct
+        
+        c_perm_cols = np.sort(np.array([perm[orig_cols[jp]] for jp in range(orig_rowp[node], orig_rowp[node+1])]))
+        perm_start = rowp[perm_node]
+        rows[perm_start:(perm_start+row_ct)] = perm_node
+        cols[perm_start:(perm_start+row_ct)] = c_perm_cols
+
+    # now copy values out of A into A0 which is now permuted
+    perm_vals = np.zeros(orig_nnz, dtype=np.double)
+    A0 = sp.sparse.csr_matrix((perm_vals, (rows, cols)), shape=(N, N))
+    for i in range(N):
+        for jp in range(orig_rowp[i], orig_rowp[i+1]):
+            j = orig_cols[jp]
+            pi, pj = perm[i], perm[j]
+            A0[pi, pj] = A[i, j]
+
+else:
+    rowp, cols = orig_rowp, orig_cols
+    A0 = A0
 
 # first we compute the elimination tree using Algorithm 4.2
 parent, ancestor = np.zeros(N, dtype=np.int32), np.zeros(N, dtype=np.int32)
@@ -38,7 +84,7 @@ for i in range(N):
             ancestor[jroot] = i
             parent[jroot] = i
 
-print(f"{parent=}")
+# print(f"{parent=}")
 # print(f"{ancestor=}")
 
 # now compute updated rowp, cols with fillin..
