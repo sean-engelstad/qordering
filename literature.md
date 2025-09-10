@@ -1,0 +1,2 @@
+* Book with ILU and other methods: [Algorithms for Sparse Linear Systems](https://link.springer.com/book/10.1007/978-3-031-25820-6)
+* qordering paper from Kyle Anderson: [Node Numbering for Stabilizing Preconditioners Based on Incomplete LU Decomposition](https://fun3d.larc.nasa.gov/papers/anderson_aiaa_2020_3022.pdf)
