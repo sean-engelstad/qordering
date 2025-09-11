@@ -1,26 +1,30 @@
 from _utils import get_beam_csr_mat_and_rhs, get_plate_csr_mat_and_rhs
+from qordering import compute_LU_fill_pattern, random_ordering, get_reordered_nofill_matrix
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy as sp
+import argparse
 
 # many steps taken from this book, [Algorithms for Sparse Linear Systems](https://link.springer.com/book/10.1007/978-3-031-25820-6) book
 # page 51 gives dense matrix gauss-elim process illustrated in prev example 1_dense_gauss_elim.py
 # here I extend to sparse Gauss-elim for symmetric matrix (so I only need elimination tree)
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--random", action=argparse.BooleanOptionalAction, default=False, help="Whether to do random ordering or not")
+parser.add_argument("--nxe", type=int, default=4, help="nxe # elements in x-dir")
+parser.add_argument("--case", type=str, default="beam", help="options: [beam, plate]")
+args = parser.parse_args()
+
 # see if random order stabilize LU factor... will add fillin though..
-# random_order = False
-random_order = True
+random_order = args.random
 
-# # nxe = 4
-# # nxe = 16 # beam problem is getting less accurate LU factor with standard ordering with more DOF also.. probably due to longer chain lengths
-# nxe = 32 # gets way less accurate LU factor.. even for beam as go up in DOF
-# # nxe = 64
-# # I can make some plots of this stuff as well for my paper?
-# A, rhs = get_beam_csr_mat_and_rhs(nxe, csr=True)
+if (args.case == "beam"):
+    A, rhs = get_beam_csr_mat_and_rhs(args.nxe, csr=True)
 
-# plate case is much larger and blows up numerically right now.. due to long chain lengths
-nxe = 4
-A, rhs = get_plate_csr_mat_and_rhs(nxe, csr=True)
+elif (args.case == "plate"):
+    A, rhs = get_plate_csr_mat_and_rhs(args.nxe, csr=True)
+
+# copy the matrix
 A0 = A.copy()
 # it's a 2DOF per node or Bsr2 matrix stored as CSR
 
@@ -31,158 +35,33 @@ orig_rowp, orig_cols = A.indptr, A.indices
 
 # compute permutation map, perm sends to permuted nodes, iperm back to unpermuted (standard order)
 if random_order:
-    perm = np.random.permutation(N)
-    ind = np.arange(0, N)
-    iperm = np.zeros(N, dtype=np.int32)
-    iperm[perm] = ind
+    perm, iperm = random_ordering(N, orig_rowp, orig_cols)
+    A0 = get_reordered_nofill_matrix(A, perm, iperm)
+    rowp, cols = A0.indptr, A0.indices
+    nnz = rowp[-1]
 
-    # compute new A_perm and sparsity
-    orig_nnz = orig_cols.shape[0]
-    rowp = np.zeros(N + 1, dtype=np.int32)
-    rows = np.zeros(orig_nnz, dtype=np.int32)
-    cols = np.zeros(orig_nnz, dtype=np.int32)
-    for perm_node in range(N):
-        node = iperm[perm_node]
-        row_ct = orig_rowp[node + 1] - orig_rowp[node]
-        rowp[perm_node + 1] = rowp[perm_node] + row_ct
-        
-        c_perm_cols = np.sort(np.array([perm[orig_cols[jp]] for jp in range(orig_rowp[node], orig_rowp[node+1])]))
-        perm_start = rowp[perm_node]
-        rows[perm_start:(perm_start+row_ct)] = perm_node
-        cols[perm_start:(perm_start+row_ct)] = c_perm_cols
-
-    # now copy values out of A into A0 which is now permuted
-    perm_vals = np.zeros(orig_nnz, dtype=np.double)
-    A0 = sp.sparse.csr_matrix((perm_vals, (rows, cols)), shape=(N, N))
-    for i in range(N):
-        for jp in range(orig_rowp[i], orig_rowp[i+1]):
-            j = orig_cols[jp]
-            pi, pj = perm[i], perm[j]
-            A0[pi, pj] = A[i, j]
+    # temp check.. see if reordered solve matches orig solve, yes they match
+    check = False
+    # check = True
+    if check:
+        rhs_perm = rhs[iperm]
+        soln1 = sp.sparse.linalg.spsolve(A, rhs)
+        soln2_perm = sp.sparse.linalg.spsolve(A0, rhs_perm)
+        soln2 = soln2_perm[perm]
+        print(f"{soln1=}")
+        print(f"{soln2=}")
+        diff_nrm = np.linalg.norm(soln1 - soln2)
+        diff_ne_nrm = np.linalg.norm(soln1 - soln2_perm)
+        print(f"{diff_nrm=:.2e} {diff_ne_nrm=:.2e}")
+        exit()
 
 else:
     rowp, cols = orig_rowp, orig_cols
     A0 = A0
 
-# first we compute the elimination tree using Algorithm 4.2
-parent, ancestor = np.zeros(N, dtype=np.int32), np.zeros(N, dtype=np.int32)
-for i in range(N):
-    parent[i], ancestor[i] = 0, 0
-    
-    # for all j such that a_ij neq 0 (this row basically in CSR), do:
-    for jp in range(rowp[i], rowp[i+1]):
-        j = cols[jp]
-        if not(j < i): continue
-        jroot = j
 
-        while ((ancestor[jroot] != 0) and (ancestor[jroot] != i)):
-            l = ancestor[jroot]
-            ancestor[jroot] = i # path compression to accel future searches
-            jroot = l
-
-        if ancestor[jroot] == 0:
-            ancestor[jroot] = i
-            parent[jroot] = i
-
-# print(f"{parent=}")
-# print(f"{ancestor=}")
-
-# now compute updated rowp, cols with fillin..
-fill_L_rowp = np.zeros(N+1, dtype=np.int32)
-# first just go through and get row counts.. then we'll come back and alloc cols
-mark = -1 * np.ones(N, dtype=np.int32)
-
-for i in range(N):
-    c_cols = []
-    mark[i] = i # encountered diagonal entry
-
-    for jp in range(rowp[i], rowp[i+1]):
-        k = cols[jp]
-        # this condition gives you only sparsity of L
-        if not(k < i): continue
-        j = k
-        while (mark[j] != i): # while col j has not encountered row i yet
-            mark[j] = i
-            c_cols += [j]
-            j = parent[j]
-
-    ncols = len(c_cols)
-    fill_L_rowp[i+1] = fill_L_rowp[i] + ncols
-
-L_nnz = fill_L_rowp[-1]
-# print(F"{nnz=}")
-fill_L_rows = np.zeros(L_nnz, dtype=np.int32)
-fill_L_cols = np.zeros(L_nnz, dtype=np.int32)
-mark = -1 * np.ones(N, dtype=np.int32)
-
-for i in range(N):
-    c_cols = []
-    mark[i] = i # col i has encountered row i
-
-    for jp in range(rowp[i], rowp[i+1]):
-        k = cols[jp]
-        # this condition gives you only sparsity of L
-        if not(k < i): continue
-        j = k
-        while (mark[j] != i): # while col j has not encountered row i yet
-            mark[j] = i
-            c_cols += [j]
-            j = parent[j]
-
-    # print(F"{c_cols=}")
-    ncols = len(c_cols)
-    if ncols > 0:
-        c_cols_sort = np.sort(c_cols)
-        start, end = fill_L_rowp[i], fill_L_rowp[i+1]
-        fill_L_cols[start : end] = c_cols_sort
-
-# now take strict lower triang sparsity L and compute full fillin sparsity fill_rowp, fill_cols
-fill_row_cts = np.ones(N, dtype=np.int32) # start with 1 for diags
-for i in range(N):
-    for jp in range(fill_L_rowp[i], fill_L_rowp[i+1]):
-        j = fill_L_cols[jp]
-
-        # add one nz above and below diag
-        fill_row_cts[i] += 1
-        fill_row_cts[j] += 1
-
-# build new rowp
-fill_rowp = np.zeros(N+1, dtype=np.int32)
-for i in range(N):
-    fill_rowp[i+1] = fill_rowp[i] + fill_row_cts[i]
+fill_rowp, fill_rows, fill_cols = compute_LU_fill_pattern(N, rowp, cols)
 fill_nnz = fill_rowp[-1]
-fill_cols = np.zeros(fill_nnz, dtype=np.int32)
-fill_rows = np.zeros(fill_nnz, dtype=np.int32)
-
-# build rows nnz vec (needed only for python CSR)
-for i in range(N):
-    for jp in range(fill_rowp[i], fill_rowp[i+1]):
-        fill_rows[jp] = i
-
-# build new cols
-next = fill_rowp.copy() # tracks fill in per row
-# go through each row, first only putting in below diag + diag
-for i in range(N):
-    # put below diag in first..
-    for jp in range(fill_L_rowp[i], fill_L_rowp[i+1]):
-        j = fill_L_cols[jp]
-        fill_cols[next[i]] = j
-        next[i] += 1
-
-    # add diagonal
-    fill_cols[next[i]] = i
-    next[i] += 1
-    
-# now go back and add above diag in..
-for i in range(N):
-    # add above diag
-    for jp in range(fill_L_rowp[i], fill_L_rowp[i+1]):
-        j = fill_L_cols[jp]
-        
-        # i,j as row,col now flipped for above diag
-        fill_cols[next[j]] = i
-        next[j] += 1
-
 
 def convert_rowp_cols_to_ones_mat(my_rowp, my_cols):
     # turn rowp into rows
@@ -196,27 +75,9 @@ def convert_rowp_cols_to_ones_mat(my_rowp, my_cols):
     return _mat
 
 ones_nofill = convert_rowp_cols_to_ones_mat(rowp, cols)
-ones_L_fill = convert_rowp_cols_to_ones_mat(fill_L_rowp, fill_L_cols)
+# ones_L_fill = convert_rowp_cols_to_ones_mat(fill_L_rowp, fill_L_cols)
 ones_fill = convert_rowp_cols_to_ones_mat(fill_rowp, fill_cols)
 
-# # ones_L_Fill to be zero where already exists in nofill.. temporarily
-# for i in range(N):
-#     for jp in range(fill_rowp[i], fill_rowp[i+1]):
-#         j = fill_cols[jp]
-#         for jp2 in range(rowp[i], rowp[i+1]):
-#             j2 = cols[jp2]
-#             if j == j2:
-#                 ones_L_fill[i,j] = 0.0
-
-# show A nofill vs L fill and A fill sparsity patterns
-# -----------------------------------------------
-# fig, ax = plt.subplots(1, 3, figsize=(10, 7))
-# # ax[0].spy(ones_nofill)
-# # ax[1].spy(ones_L_fill)
-# ax[0].imshow(ones_nofill.toarray())
-# ax[1].imshow(ones_L_fill.toarray())
-# ax[2].imshow(ones_fill.toarray())
-# plt.show()
 
 # now make matrices for A0, L and U with fillin
 # ---------------------------------------------
@@ -235,6 +96,7 @@ for i in range(N):
 # ax[0].imshow(A0.toarray())
 # ax[1].imshow(A0_fill.toarray())
 # plt.show()
+
 
 # now do sparse gauss-elim on the full LU fillin pattern..
 # --------------------------------------------------------
@@ -301,24 +163,34 @@ for i in range(N):
         for kp in range(fill_rowp[i], fill_rowp[i+1]):
             k = fill_cols[kp]
             R[i,j] -= L[i,k] * U[k,j]
+        # yeah only the lower triang ends up having error.. hmm
+        # print(f"R[{i=},{j=}]={R[i,j]:.2e}")
 # R = A0_fill - L @ U # this doens't have right sparsity.. ?
-R_nrm = np.linalg.norm(R.toarray())
-A_nrm = np.linalg.norm(A0.toarray())
+R_nrm = np.max(R.toarray())
+A_nrm = np.max(A0.toarray())
 print(f"LU factor error: {R_nrm=:.4e} / {A_nrm=:.4e}")
 
 # now plot the matrices
 def plot_sparse_log(_ax, csr_mat):
-    np_mat = csr_mat.toarray()
-    np_mat[np_mat == 0.0] = np.nan
-    np_mat[np_mat != 0.0] = np.log(np.abs(np_mat[np_mat != 0.0])) #  + 1e-3
-    # print(f"{np_mat=}")
+    np_mat = np.zeros(csr_mat.shape)
+    np_mat[:,:] = np.nan # values that are not in sparsity will be nan
+    _rowp, _cols = csr_mat.indptr, csr_mat.indices
+    for i in range(N):
+        for jp in range(_rowp[i], _rowp[i+1]):
+            j = _cols[jp]
+            _val = csr_mat[i,j]
+            _log_val = np.log10(1e-12 + _val**2)
+            np_mat[i,j] = _log_val
     _ax.imshow(np_mat)
     return np_mat
 # print(f"{L.toarray()=}")
+
+plt.imshow(A0.toarray())
+plt.show()
     
 
 fig, ax = plt.subplots(2, 2, figsize=(12, 8))
-matrices = [A0_fill, R, L, U]
+matrices = [A0, R, L, U]
 for ind, my_mat in enumerate(matrices):
     i, j = ind // 2, ind % 2
     plot_sparse_log(ax[i,j], my_mat.copy())

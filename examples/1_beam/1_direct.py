@@ -17,7 +17,7 @@ mat, rhs = beam_fea.Kmat, beam_fea.force
 
 # solve FEA problem
 beam_fea.u = sp.sparse.linalg.spsolve(mat, rhs)
-# beam_fea.plot_disp()
+beam_fea.plot_disp()
 
 # see sparsity of rowp and cols in beam..
 rowp, cols = mat.indptr, mat.indices

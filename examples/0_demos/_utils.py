@@ -5,7 +5,7 @@ def get_beam_csr_mat_and_rhs(nxe=300, csr:bool=True):
     E = 2e7; b = 4e-3; L = 1; rho = 1
     qmag, ys, rho_KS = 2e-2, 4e5, 50.0
     nxh = np.min([100, nxe])
-    hvec = np.array([1e-3] * nxh)
+    hvec = np.array([1e-2] * nxh)
 
     # create and assemble FEA problem
     beam_fea = BeamFem(nxe, nxh, E, b, L, rho, qmag, ys, rho_KS, dense=False)
