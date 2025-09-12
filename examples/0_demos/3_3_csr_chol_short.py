@@ -1,5 +1,7 @@
 from _utils import get_beam_csr_mat_and_rhs, get_plate_csr_mat_and_rhs
-from qordering import random_ordering, get_reordered_nofill_matrix, get_LU_fill_matrix
+from qordering import random_ordering, get_reordered_nofill_matrix, get_transpose_pattern, get_rows_from_rowp
+from qordering import get_LU_fill_matrix, get_lower_triang_pattern
+from qordering import csr_cholesky
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy as sp
@@ -9,7 +11,6 @@ import argparse
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--random", action=argparse.BooleanOptionalAction, default=False, help="Whether to do random ordering or not")
-parser.add_argument("--rem_bcs", action=argparse.BooleanOptionalAction, default=False, help="remove bcs or not from matrix")
 parser.add_argument("--plot", action=argparse.BooleanOptionalAction, default=False, help="Plot matrices and residual")
 parser.add_argument("--nxe", type=int, default=4, help="nxe # elements in x-dir")
 parser.add_argument("--case", type=str, default="beam", help="options: [beam, plate]")
@@ -37,40 +38,37 @@ if random_order:
 else:
     A0 = A0
 
-# perform the LU fillin which copies values
+# get L fill pattern
+rowp, cols = A0.indptr, A0.indices
+# parent, ancestor = get_elim_tree(N, rowp, cols)
+# L_rowp, L_cols = get_L_fill_pattern(N, rowp, cols, parent, ancestor, strict_lower=False)
+# if you want full fillin, but with this way you can now do no fill here too..
 A_fill = get_LU_fill_matrix(A0)
-rowp, cols = A_fill.indptr, A_fill.indices
+L_rowp, L_cols = get_lower_triang_pattern(A_fill, strict_lower=False)
+LT_rowp, LT_cols, _ = get_transpose_pattern(N, L_rowp, L_cols)
+L_nnz = L_rowp[-1]
+L_rows = get_rows_from_rowp(N, L_rowp)
 
-# use dense matrix in computations first (prototype)
+# use csr sparsity pattern to do this..
 # --------------------------------------------------
 
 A_orig = A.copy()
-A = A_fill.toarray()
-L = np.zeros_like(A)
+A = A_fill.copy()
+L = csr_cholesky(A)
 
-# dense version of csr cholesky
-# algorithm 5.1 on page 74 (in-place dense left-looking cholesky)
-for j in range(N):
-    L[j:,j] = A[j:,j]
-    for k in range(j):
-        L[j:,j] -= L[j:,k] * L[j,k]
-    L[j,j] = np.sqrt(L[j,j])
-    L[(j+1):,j] /= L[j,j]
+print("done with csr cholesky factor")
 
 # now check the accuracy of the cholesky factor here..
 R = A - L @ L.T
-R_nrm = np.linalg.norm(R)
+R_nrm = np.linalg.norm(R.toarray())
 print(f"{R_nrm=}")
-
-print(f"{A=}")
-print(f"{L=}")
 
 # # show L, U and A
 if args.plot:
     fig, ax = plt.subplots(2,2, figsize=(12, 8))
-    ax[0,0].imshow(L)
-    ax[0,1].imshow(L.T)
-    ax[1,0].imshow(A)
-    ax[1,1].imshow(R)
+    ax[0,0].imshow(L.toarray())
+    ax[0,1].imshow(L.toarray().T)
+    ax[1,0].imshow(A.toarray())
+    ax[1,1].imshow(R.toarray())
     plt.show()
     exit()

@@ -9,6 +9,7 @@ import argparse
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--random", action=argparse.BooleanOptionalAction, default=False, help="Whether to do random ordering or not")
+parser.add_argument("--plot", action=argparse.BooleanOptionalAction, default=False, help="Plot matrices and residual")
 parser.add_argument("--rem_bcs", action=argparse.BooleanOptionalAction, default=False, help="remove bcs or not from matrix")
 parser.add_argument("--nxe", type=int, default=4, help="nxe # elements in x-dir")
 parser.add_argument("--case", type=str, default="beam", help="options: [beam, plate]")
@@ -106,13 +107,14 @@ R_nrm = np.linalg.norm(R)
 print(f"LU factor resid nrm = {R_nrm:.4e}")
 
 # # show L, U and A
-# fig, ax = plt.subplots(2,2, figsize=(12, 8))
-# ax[0,0].imshow(L)
-# ax[0,1].imshow(U)
-# ax[1,0].imshow(A)
-# ax[1,1].imshow(R)
-# plt.show()
-# exit()
+if args.plot:
+    fig, ax = plt.subplots(2,2, figsize=(12, 8))
+    ax[0,0].imshow(L)
+    ax[0,1].imshow(U)
+    ax[1,0].imshow(A)
+    ax[1,1].imshow(R)
+    plt.show()
+    # exit()
 
 # now try computing LU solve
 if not args.random:

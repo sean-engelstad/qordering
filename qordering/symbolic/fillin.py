@@ -24,7 +24,7 @@ def get_elim_tree(N, rowp, cols):
 
     return parent, ancestor
 
-def get_L_fill_pattern(N, rowp, cols, parent, ancestor):
+def get_L_fill_pattern(N, rowp, cols, parent, ancestor, strict_lower:bool=True):
     # now compute updated rowp, cols with fillin..
     fill_L_rowp = np.zeros(N+1, dtype=np.int32)
     # first just go through and get row counts.. then we'll come back and alloc cols
@@ -74,7 +74,127 @@ def get_L_fill_pattern(N, rowp, cols, parent, ancestor):
             start, end = fill_L_rowp[i], fill_L_rowp[i+1]
             fill_L_cols[start : end] = c_cols_sort
 
+    if not strict_lower:
+        # add diagonal to L (it gives just strict L originally)
+        L_rowp = np.zeros(N+1, dtype=np.int32)
+        for i in range(N):
+            row_ct = fill_L_rowp[i+1] - fill_L_rowp[i]
+            L_rowp[i+1] = L_rowp[i] + (row_ct + 1)
+        L_nnz = L_rowp[-1]
+        L_rows = np.zeros(L_nnz, dtype=np.int32)
+        for i in range(N):
+            for jp in range(L_rowp[i], L_rowp[i+1]):
+                L_rows[jp] = i
+        L_cols = np.zeros(L_nnz, dtype=np.int32)
+        for i in range(N):
+            strict_start = fill_L_rowp[i]
+            start = L_rowp[i]
+            for jp in range(fill_L_rowp[i], fill_L_rowp[i+1]):
+                offset = jp - strict_start
+                L_cols[start + offset] = fill_L_cols[jp]
+            L_cols[L_rowp[i+1]-1] = i # diag entry
+
+        fill_L_rowp, fill_L_cols = L_rowp, L_cols
+
     return fill_L_rowp, fill_L_cols
+
+def get_lower_triang_pattern(A, strict_lower:bool=False):
+    # get general lower triang pattern from A
+    N = A.shape[0]
+    rowp, cols = A.indptr, A.indices
+
+    L_row_cts = np.zeros(N, dtype=np.int32)
+    for i in range(N):
+        for jp in range(rowp[i], rowp[i+1]):
+            j = cols[jp]
+            if strict_lower and i > j:
+                L_row_cts[i] += 1
+            elif not(strict_lower) and i >= j:
+                L_row_cts[i] += 1
+
+    L_rowp = np.zeros(N+1, dtype=np.int32)
+    for i in range(N):
+        L_rowp[i+1] = L_rowp[i] + L_row_cts[i]
+
+    nnz = L_rowp[-1]
+    L_rows = np.zeros(nnz, dtype=np.int32)
+    for i in range(N):
+        for jp in range(L_rowp[i], L_rowp[i+1]):
+            L_rows[jp] = i
+
+    L_cols = np.zeros(nnz, dtype=np.int32)
+    next = np.zeros(N, dtype=np.int32) # keeps track of how much we've filled each row in CSR format
+    for i in range(N):
+        for jp in range(rowp[i], rowp[i+1]):
+            j = cols[jp]
+
+            insert = False
+            if strict_lower and i > j:
+                insert = True
+            elif not(strict_lower) and i >= j:
+                insert = True
+
+            if insert:
+                start = L_rowp[i]
+                L_cols[start + next[i]] = j
+                next[i] += 1
+    return L_rowp, L_cols
+
+def get_transpose_pattern(N, rowp, cols, get_map:bool=False):
+    # general get transpose pattern
+    # construct also the strict upper triangular part..
+    # so we can slice by columns as well..
+    tr_row_cts = np.zeros(N, dtype=np.int32)
+    for i in range(N):
+        for jp in range(rowp[i], rowp[i+1]):
+            j = cols[jp]
+            tr_row_cts[j] += 1
+
+    tr_rowp = np.zeros(N+1, dtype=np.int32)
+    for i in range(N):
+        tr_rowp[i+1] = tr_rowp[i] + tr_row_cts[i]
+
+    nnz = tr_rowp[-1]
+    tr_rows = np.zeros(nnz, dtype=np.int32)
+    for i in range(N):
+        for jp in range(tr_rowp[i], tr_rowp[i+1]):
+            tr_rows[jp] = i
+
+    tr_cols = np.zeros(nnz, dtype=np.int32)
+    next = np.zeros(N, dtype=np.int32) # keeps track of how much we've filled each row in CSR format
+    for i in range(N):
+        for jp in range(rowp[i], rowp[i+1]):
+            j = cols[jp]
+            # flip i,j as row,col => j,i in our head
+            start = tr_rowp[j]
+            tr_cols[start + next[j]] = i
+            next[j] += 1
+
+    # map from nnz in transpose to un-transpose storage
+    if get_map:
+        tr_map = np.zeros(nnz, dtype=np.int32)
+        for i in range(N):
+            for jp in range(rowp[i], rowp[i+1]):
+                j = cols[jp]
+
+                # find equivalent indptr in transpose matrix
+                for ip in range(tr_rowp[j], tr_rowp[j+1]):
+                    i2 = tr_cols[ip]
+                    if i == i2:
+                        tr_map[ip] = jp
+                        break
+    else:
+        tr_map = None
+
+    return tr_rowp, tr_cols, tr_map
+
+def get_rows_from_rowp(N, rowp):
+    nnz = rowp[-1]
+    rows = np.zeros(nnz, dtype=np.int32)
+    for i in range(N):
+        for jp in range(rowp[i], rowp[i+1]):
+            rows[jp] = i
+    return rows
 
 def strict_L_to_full_LU_patern(N, L_rowp, L_cols):
     # now take strict lower triang sparsity L and compute full fillin sparsity fill_rowp, fill_cols
@@ -129,7 +249,7 @@ def strict_L_to_full_LU_patern(N, L_rowp, L_cols):
 def compute_LU_fill_pattern(N, rowp, cols):
     """procedure for full LU fill pattern from symmetric square matrix"""
     parent, ancestor = get_elim_tree(N, rowp, cols)
-    L_rowp, L_cols = get_L_fill_pattern(N, rowp, cols, parent, ancestor)
+    L_rowp, L_cols = get_L_fill_pattern(N, rowp, cols, parent, ancestor, strict_lower=True)
     fill_rowp, fill_rows, fill_cols = strict_L_to_full_LU_patern(N, L_rowp, L_cols)
     return fill_rowp, fill_rows, fill_cols
 
