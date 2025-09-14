@@ -46,6 +46,10 @@ for i in range(N):
                 A[k,j] = 0.0
             else:
                 A[k,j] -= d[k] * A[j,i]
+            # in an efficient CSR implementaton,
+            # since the nofill values are immediately added into the diagonals
+            # you don't need to allocate memory spots for fillin still.. and you can add to diags first
+            # cause the second part of the j & k for loops (nofill spots) don't depend on diags..
 
 # now check UT, D, R
 D = np.diag(d)
