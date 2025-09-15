@@ -34,6 +34,16 @@ def get_reordered_nofill_pattern(N, orig_rowp, orig_cols, perm, iperm):
     
     return rowp, rows, cols
 
+def get_diag_rowp(N, rowp, cols):
+    # get a pointer to index of diagonal entry of each row
+    diag_rowp = np.zeros(N, dtype=np.int32)
+    for i in range(N):
+        for jp in range(rowp[i], rowp[i+1]):
+            j = cols[jp]
+            if i == j:
+                diag_rowp[i] = jp
+    return diag_rowp
+
 def get_reordered_nofill_matrix(A_orig:sp.sparse.csr_matrix, perm, iperm) -> sp.sparse.csr_matrix:
     # compute reordered nofill matrix with values
     
@@ -52,3 +62,19 @@ def get_reordered_nofill_matrix(A_orig:sp.sparse.csr_matrix, perm, iperm) -> sp.
             A[pi, pj] = A_orig[i, j]
     
     return A
+
+def get_upper_triang_values(N, rowp, cols, vals, U_rowp, U_cols):
+    """get only the values out of upper triangular part.."""
+
+    U_nnz = U_rowp[-1]
+    U_vals = np.zeros(U_nnz, dtype=np.double)
+    next = U_rowp[:-1].copy()
+    for i in range(N):
+        for jp in range(rowp[i], rowp[i+1]):
+            j = cols[jp]
+            for jp2 in range(U_rowp[i], U_rowp[i+1]):
+                j2 = U_cols[jp2]
+                if j == j2:
+                    U_vals[next[i]] = vals[jp]
+                    next[i] += 1
+    return U_vals

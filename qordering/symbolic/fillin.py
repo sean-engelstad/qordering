@@ -140,6 +140,48 @@ def get_lower_triang_pattern(A, strict_lower:bool=False):
                 next[i] += 1
     return L_rowp, L_cols
 
+def get_upper_triang_pattern(A, strict_upper:bool=False):
+    # get general upper triang pattern from A
+    N = A.shape[0]
+    rowp, cols = A.indptr, A.indices
+
+    U_row_cts = np.zeros(N, dtype=np.int32)
+    for i in range(N):
+        for jp in range(rowp[i], rowp[i+1]):
+            j = cols[jp]
+            if strict_upper and i < j:
+                U_row_cts[i] += 1
+            elif not(strict_upper) and i <= j:
+                U_row_cts[i] += 1
+
+    U_rowp = np.zeros(N+1, dtype=np.int32)
+    for i in range(N):
+        U_rowp[i+1] = U_rowp[i] + U_row_cts[i]
+
+    nnz = U_rowp[-1]
+    U_rows = np.zeros(nnz, dtype=np.int32)
+    for i in range(N):
+        for jp in range(U_rowp[i], U_rowp[i+1]):
+            U_rows[jp] = i
+
+    U_cols = np.zeros(nnz, dtype=np.int32)
+    next = np.zeros(N, dtype=np.int32) # keeps track of how much we've filled each row in CSR format
+    for i in range(N):
+        for jp in range(rowp[i], rowp[i+1]):
+            j = cols[jp]
+
+            insert = False
+            if strict_upper and i < j:
+                insert = True
+            elif not(strict_upper) and i <= j:
+                insert = True
+
+            if insert:
+                start = U_rowp[i]
+                U_cols[start + next[i]] = j
+                next[i] += 1
+    return U_rowp, U_cols
+
 def get_transpose_pattern(N, rowp, cols, get_map:bool=False):
     # general get transpose pattern
     # construct also the strict upper triangular part..
@@ -183,6 +225,7 @@ def get_transpose_pattern(N, rowp, cols, get_map:bool=False):
                     if i == i2:
                         tr_map[ip] = jp
                         break
+        print(f"{tr_map=}")
     else:
         tr_map = None
 
@@ -272,3 +315,34 @@ def get_LU_fill_matrix(A_orig:sp.sparse.csr_matrix) -> sp.sparse.csr_matrix:
             A_fill[i,j] = A_orig[i,j]
     return A_fill
     
+def get_fillin_only_pattern(N, rowp, cols, fill_rowp, fill_cols):
+    """compute the fillin only pattern (excludes nofill entries)"""
+
+    fillin_row_cts = np.zeros(N, dtype=np.int32)
+    for i in range(N):
+        nofill_row_ct = rowp[i+1] - rowp[i]
+        fill_row_ct = fill_rowp[i+1] - fill_rowp[i]
+
+        fillin_row_cts[i] = fill_row_ct - nofill_row_ct
+    
+    fillin_rowp = np.zeros(N+1, dtype=np.int32)
+    for i in range(N):
+        fillin_rowp[i+1] = fillin_rowp[i] + fillin_row_cts[i]
+
+    nnz = fillin_rowp[-1]
+    fillin_cols = np.zeros(nnz, dtype=np.int32)
+    next = fillin_rowp[:-1].copy()
+    for i in range(N):
+        for jp in range(fill_rowp[i], fill_rowp[i+1]):
+            j = fill_cols[jp]
+            is_fillin = True
+            for jp2 in range(rowp[i], rowp[i+1]):
+                j2 = cols[jp2]
+                if j == j2: 
+                    is_fillin = False
+                    break
+        
+            if is_fillin:
+                fillin_cols[next[i]] = j
+                next[i] += 1
+    return fillin_rowp, fillin_cols

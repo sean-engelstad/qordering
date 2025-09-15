@@ -33,6 +33,7 @@ for i in range(N):
     d[i] = 1.0 / A[i,i]
     for j in range(i+1,N):
         d[j] = A[j,i] * d[i]
+    print(f"{d=}")
     for j in range(i+1,N):
         for k in range(j,N):
             if Z[k] == j:
@@ -41,15 +42,23 @@ for i in range(N):
                 # into the diagonals..
                 # so equiv is.. this will be important for efficient CSR nofill VMICF(0) implementation
                 A[k,j] = -d[k] * A[j,i] # no fillin storage required..
+
+                val = np.abs(A[k,j])
+                print(f"A[{k=},{j=}] Z spot => inc Akk,Ajj by {val:.2e}")
+
                 A[k,k] += np.abs(A[k,j])
                 A[j,j] += np.abs(A[k,j])
                 A[k,j] = 0.0
             else:
+                val = d[k] * A[j,i]
+                print(f"A[{k=},{j=}] nofill dec by {val:.2e}")
+
                 A[k,j] -= d[k] * A[j,i]
             # in an efficient CSR implementaton,
             # since the nofill values are immediately added into the diagonals
             # you don't need to allocate memory spots for fillin still.. and you can add to diags first
             # cause the second part of the j & k for loops (nofill spots) don't depend on diags..
+    print(f"{A=}")
 
 # now check UT, D, R
 D = np.diag(d)
@@ -58,6 +67,10 @@ for i in range(N):
     for j in range(i+1,N):
         L[i,j] = 0.0
 R = L @ D @ L.T - A0
+
+print(f"{L=}")
+print(f"{d=}")
+
 fig, ax = plt.subplots(1, 3, figsize=(12, 9))
 ax[0].imshow(L)
 ax[1].imshow(D)
