@@ -9,5 +9,5 @@ setup(
     author="Sean P. Engelstad",
     author_email="sengeltad312@gatech.edu",
     install_requires=["numpy", "scipy"],
-    packages=find_packages(include=["src*"]),
+    packages=find_packages(include=["qordering*"]),
 )

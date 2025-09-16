@@ -1,9 +1,9 @@
 # now let's test this out and visualize it
 import numpy as np
-from qordering import PlateAssembler
+from qordering import BeamFem
 import scipy as sp
 from qordering import random_ordering, get_reordered_nofill_matrix, get_LU_fill_matrix
-from qordering import get_transpose_matrix, csr_cholesky, CholPrecond
+from qordering import get_transpose_matrix, vmicf_cholesky, CholPrecond
 from qordering import right_pgmres
 import argparse
 
@@ -11,33 +11,20 @@ parser = argparse.ArgumentParser()
 # parser.add_argument("--random", action=argparse.BooleanOptionalAction, default=False, help="Whether to do random ordering or not")
 parser.add_argument("--plot", action=argparse.BooleanOptionalAction, default=False, help="Plot matrices and residual")
 parser.add_argument("--fill", action=argparse.BooleanOptionalAction, default=False, help="Fillin the matrix for debugging")
-parser.add_argument("--noprec", action=argparse.BooleanOptionalAction, default=False, help="remove preconditioner in GMRES")
 parser.add_argument("--nxe", type=int, default=4, help="nxe # elements in x-dir")
 args = parser.parse_args()
 
+E = 2e7; b = 4e-3; L = 1; rho = 1
+qmag, ys, rho_KS = 2e-2, 4e5, 50.0
+
+nxh = args.nxe
+hvec = np.array([1e-3] * nxh)
+
 # create and assemble FEA problem
-nxe, nxc = args.nxe, 1
-plate_fea = PlateAssembler.aluminum_unitsquare_trigload(
-    num_elements=nxe**2,
-    num_components=nxc**2,
-    rho_KS=200.0,
-    qmag=2e-2, 
-    can_print=False
-)
-ncomp = plate_fea.ncomp
-hred = np.array([5e-3] * ncomp)
-helem_vec = plate_fea.get_helem_vec(hred)
-plate_fea._compute_mat_vec(helem_vec)
-mat, rhs = plate_fea.Kmat, plate_fea.force
-
-# try RCM ordering => reduces bandwidth (and fillin?) resulting in more accuracy
-
-# remove_bcs = True
-# if remove_bcs:
-#     mat = mat.toarray()
-#     mat, rhs = remove_bcs(mat, rhs)
-#     if csr:
-#         mat = sp.sparse.linalg.csr_matrix(mat)
+beam_fea = BeamFem(args.nxe, nxh, E, b, L, rho, qmag, ys, rho_KS, dense=False)
+helem_vec = beam_fea.get_helem_vec(hvec)
+beam_fea._compute_mat_vec(helem_vec)
+mat, rhs = beam_fea.Kmat, beam_fea.force
 
 # no reordering IC(0) right-PGMRES
 # --------------------------------
@@ -58,21 +45,14 @@ b = rhs.copy()
 if args.fill:
     A = get_LU_fill_matrix(A)
 
-# do IC(0) cholesky factor
-L = csr_cholesky(A)
-LT = get_transpose_matrix(L)
-
-# compute precond error..
-L_np = L.toarray()
-R = A - L_np @ L_np.T
-factor_resid_nrm = np.linalg.norm(R)
-print(f"{factor_resid_nrm=:.2e}")
+# do IC(0) cholesky factor, VMICF or variational version
+L, D, U = vmicf_cholesky(A)
 
 # make preconditioner class
-ic0_precond = CholPrecond(L, LT)
+ic0_precond = CholPrecond(L, U, D=D)
 
 # solve FEA problem using right-PGMRES with IC0 precond
-x = right_pgmres(A, b, x0=None, restart=100, max_iter=200, M=ic0_precond if not(args.noprec) else None)
+x = right_pgmres(A, b, x0=None, restart=50, max_iter=200, M=ic0_precond)
 
 # compare to spsolve 
 x_truth = sp.sparse.linalg.spsolve(A, b)
@@ -80,7 +60,7 @@ x_truth = sp.sparse.linalg.spsolve(A, b)
 # error and resid
 r = b - A @ x
 e = x - x_truth
-r_nrm, e_nrm = np.max(np.abs(r)), np.max(np.abs(e))
+r_nrm, e_nrm = np.linalg.norm(r), np.linalg.norm(e)
 print(f"{r_nrm=:.4e} {e_nrm=:.4e}")
 
 # plot the solution we just got..
@@ -89,5 +69,5 @@ print(f"{r_nrm=:.4e} {e_nrm=:.4e}")
 # else:
 soln = x
 
-plate_fea.u = soln.copy()
-plate_fea.plot_disp()
+beam_fea.u = soln.copy()
+beam_fea.plot_disp()

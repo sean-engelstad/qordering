@@ -1,5 +1,6 @@
 import numpy as np
 import scipy as sp
+from ._utils import *
 
 def get_elim_tree(N, rowp, cols):
     # first we compute the elimination tree using Algorithm 4.2 (for sym matrix..)
@@ -100,11 +101,11 @@ def get_L_fill_pattern(N, rowp, cols, parent, ancestor, strict_lower:bool=True):
 
 def get_lower_triang_pattern(A, strict_lower:bool=False):
     # get general lower triang pattern from A
-    N = A.shape[0]
+    nnodes = A.indptr.shape[0] - 1 # more general way (num nodes instead of num dof) for CSR or BSR matrix
     rowp, cols = A.indptr, A.indices
 
-    L_row_cts = np.zeros(N, dtype=np.int32)
-    for i in range(N):
+    L_row_cts = np.zeros(nnodes, dtype=np.int32)
+    for i in range(nnodes):
         for jp in range(rowp[i], rowp[i+1]):
             j = cols[jp]
             if strict_lower and i > j:
@@ -112,19 +113,19 @@ def get_lower_triang_pattern(A, strict_lower:bool=False):
             elif not(strict_lower) and i >= j:
                 L_row_cts[i] += 1
 
-    L_rowp = np.zeros(N+1, dtype=np.int32)
-    for i in range(N):
+    L_rowp = np.zeros(nnodes+1, dtype=np.int32)
+    for i in range(nnodes):
         L_rowp[i+1] = L_rowp[i] + L_row_cts[i]
 
     nnz = L_rowp[-1]
     L_rows = np.zeros(nnz, dtype=np.int32)
-    for i in range(N):
+    for i in range(nnodes):
         for jp in range(L_rowp[i], L_rowp[i+1]):
             L_rows[jp] = i
 
     L_cols = np.zeros(nnz, dtype=np.int32)
-    next = np.zeros(N, dtype=np.int32) # keeps track of how much we've filled each row in CSR format
-    for i in range(N):
+    next = np.zeros(nnodes, dtype=np.int32) # keeps track of how much we've filled each row in CSR format
+    for i in range(nnodes):
         for jp in range(rowp[i], rowp[i+1]):
             j = cols[jp]
 
@@ -142,11 +143,11 @@ def get_lower_triang_pattern(A, strict_lower:bool=False):
 
 def get_upper_triang_pattern(A, strict_upper:bool=False):
     # get general upper triang pattern from A
-    N = A.shape[0]
+    nnodes = A.indptr.shape[0] - 1 # more general way (num nodes instead of num dof) for CSR or BSR matrix
     rowp, cols = A.indptr, A.indices
 
-    U_row_cts = np.zeros(N, dtype=np.int32)
-    for i in range(N):
+    U_row_cts = np.zeros(nnodes, dtype=np.int32)
+    for i in range(nnodes):
         for jp in range(rowp[i], rowp[i+1]):
             j = cols[jp]
             if strict_upper and i < j:
@@ -154,19 +155,19 @@ def get_upper_triang_pattern(A, strict_upper:bool=False):
             elif not(strict_upper) and i <= j:
                 U_row_cts[i] += 1
 
-    U_rowp = np.zeros(N+1, dtype=np.int32)
-    for i in range(N):
+    U_rowp = np.zeros(nnodes+1, dtype=np.int32)
+    for i in range(nnodes):
         U_rowp[i+1] = U_rowp[i] + U_row_cts[i]
 
     nnz = U_rowp[-1]
     U_rows = np.zeros(nnz, dtype=np.int32)
-    for i in range(N):
+    for i in range(nnodes):
         for jp in range(U_rowp[i], U_rowp[i+1]):
             U_rows[jp] = i
 
     U_cols = np.zeros(nnz, dtype=np.int32)
-    next = np.zeros(N, dtype=np.int32) # keeps track of how much we've filled each row in CSR format
-    for i in range(N):
+    next = np.zeros(nnodes, dtype=np.int32) # keeps track of how much we've filled each row in CSR format
+    for i in range(nnodes):
         for jp in range(rowp[i], rowp[i+1]):
             j = cols[jp]
 
@@ -296,23 +297,47 @@ def compute_LU_fill_pattern(N, rowp, cols):
     fill_rowp, fill_rows, fill_cols = strict_L_to_full_LU_patern(N, L_rowp, L_cols)
     return fill_rowp, fill_rows, fill_cols
 
-def get_LU_fill_matrix(A_orig:sp.sparse.csr_matrix) -> sp.sparse.csr_matrix:
+def get_LU_fill_matrix(A_orig):
     """full process of getting LU fill pattern and copying values for symmetric square matrix"""
 
     # get fill pattern first from original matrix
     N = A_orig.shape[0]
     rowp, cols = A_orig.indptr, A_orig.indices
-    fill_rowp, fill_rows, fill_cols = compute_LU_fill_pattern(N, rowp, cols)
-    fill_nnz = fill_rowp[-1]
+    if isinstance(A_orig, sp.sparse.csr_matrix):
+        block_dim = 1
+    elif isinstance(A_orig, sp.sparse.bsr_matrix):
+        block_dim = A_orig.data.shape[-1]
+    nnodes = N // block_dim
 
-    fill_vals = np.zeros(fill_nnz, dtype=np.double)
-    A_fill = sp.sparse.csr_matrix((fill_vals, (fill_rows, fill_cols)), shape=(N, N))
+    fill_rowp, fill_rows, fill_cols = compute_LU_fill_pattern(nnodes, rowp, cols)
+    fill_nnzb = fill_rowp[-1]
 
-    # copy values from nofill sparsity
-    for i in range(N):
-        for jp in range(rowp[i], rowp[i+1]):
-            j = cols[jp]
-            A_fill[i,j] = A_orig[i,j]
+    if isinstance(A_orig, sp.sparse.csr_matrix):
+        fill_vals = np.zeros(fill_nnzb, dtype=np.double)
+        A_fill = sp.sparse.csr_matrix((fill_vals, (fill_rows, fill_cols)), shape=(N, N))
+
+        # copy values from nofill sparsity
+        for i in range(N):
+            for jp in range(rowp[i], rowp[i+1]):
+                j = cols[jp]
+                A_fill[i,j] = A_orig[i,j]
+
+    elif isinstance(A_orig, sp.sparse.bsr_matrix):
+        fill_vals = np.zeros((fill_nnzb, block_dim, block_dim), dtype=np.double)
+        
+        # copy values
+        inzb = 0
+        _next = fill_rowp[:-1].copy() # copy fill rowp, temp util array for inserting block vals
+        for ib in range(nnodes):
+            for jp in range(rowp[ib], rowp[ib+1]):
+                jb = cols[jp]
+                for inz in range(block_dim**2):
+                    ii, jj = inz % block_dim, inz // block_dim
+                    fill_vals[_next[ib], ii, jj] = A_orig.data[jp,ii,jj]
+                _next[ib] += 1
+
+        A_fill = sp.sparse.bsr_matrix((fill_vals, fill_cols, fill_rowp), shape=(N, N))
+    
     return A_fill
     
 def get_fillin_only_pattern(N, rowp, cols, fill_rowp, fill_cols):

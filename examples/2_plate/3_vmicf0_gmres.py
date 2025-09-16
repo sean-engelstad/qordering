@@ -3,15 +3,20 @@ import numpy as np
 from qordering import PlateAssembler
 import scipy as sp
 from qordering import random_ordering, get_reordered_nofill_matrix, get_LU_fill_matrix
-from qordering import get_transpose_matrix, csr_cholesky, CholPrecond
+from qordering import get_transpose_matrix, vmicf_cholesky, CholPrecond
 from qordering import right_pgmres
 import argparse
+
+"""
+this VMICF thing doesn't actually help convergence..
+"""
 
 parser = argparse.ArgumentParser()
 # parser.add_argument("--random", action=argparse.BooleanOptionalAction, default=False, help="Whether to do random ordering or not")
 parser.add_argument("--plot", action=argparse.BooleanOptionalAction, default=False, help="Plot matrices and residual")
 parser.add_argument("--fill", action=argparse.BooleanOptionalAction, default=False, help="Fillin the matrix for debugging")
 parser.add_argument("--noprec", action=argparse.BooleanOptionalAction, default=False, help="remove preconditioner in GMRES")
+parser.add_argument("--not_mmat", action=argparse.BooleanOptionalAction, default=False, help="Make not an M-matrix") # this is kind of dumb in their paper.. (see paper from 4_3_csr_vmicf.py, only conv fast when not M mat, when off-diag are positive?)
 parser.add_argument("--nxe", type=int, default=4, help="nxe # elements in x-dir")
 args = parser.parse_args()
 
@@ -29,8 +34,6 @@ hred = np.array([5e-3] * ncomp)
 helem_vec = plate_fea.get_helem_vec(hred)
 plate_fea._compute_mat_vec(helem_vec)
 mat, rhs = plate_fea.Kmat, plate_fea.force
-
-# try RCM ordering => reduces bandwidth (and fillin?) resulting in more accuracy
 
 # remove_bcs = True
 # if remove_bcs:
@@ -58,18 +61,17 @@ b = rhs.copy()
 if args.fill:
     A = get_LU_fill_matrix(A)
 
-# do IC(0) cholesky factor
-L = csr_cholesky(A)
-LT = get_transpose_matrix(L)
+# do IC(0) cholesky factor, VMICF or variational version
+L, D, U = vmicf_cholesky(A, make_not_m=args.not_mmat)
+
+# make preconditioner class
+ic0_precond = CholPrecond(L, U, D=D)
 
 # compute precond error..
 L_np = L.toarray()
-R = A - L_np @ L_np.T
+R = A - L_np @ D @ L_np.T
 factor_resid_nrm = np.linalg.norm(R)
 print(f"{factor_resid_nrm=:.2e}")
-
-# make preconditioner class
-ic0_precond = CholPrecond(L, LT)
 
 # solve FEA problem using right-PGMRES with IC0 precond
 x = right_pgmres(A, b, x0=None, restart=100, max_iter=200, M=ic0_precond if not(args.noprec) else None)
@@ -89,5 +91,6 @@ print(f"{r_nrm=:.4e} {e_nrm=:.4e}")
 # else:
 soln = x
 
-plate_fea.u = soln.copy()
-plate_fea.plot_disp()
+if args.plot:
+    plate_fea.u = soln.copy()
+    plate_fea.plot_disp()
